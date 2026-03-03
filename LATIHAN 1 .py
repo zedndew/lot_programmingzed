@@ -5,8 +5,8 @@ import numpy as np
 from shapely.geometry import Polygon, Point, LineString
 import json
 import os
-import folium # <--- TAMBAH INI
-from streamlit_folium import folium_static # <--- TAMBAH INI
+import folium 
+from streamlit_folium import folium_static 
 
 # ================== FUNGSI TUKAR DMS ==================
 def format_dms(decimal_degree):
@@ -73,7 +73,6 @@ if check_password():
     label_size_stn = st.sidebar.slider("Saiz Label Stesen", 6, 16, 10)
     label_size_data = st.sidebar.slider("Saiz Bearing/Jarak", 5, 12, 7)
     
-    # FEATURE BARU: Slider untuk ubah saiz tulisan "LUAS"
     label_size_luas = st.sidebar.slider("Saiz Tulisan LUAS", 8, 30, 12) 
     
     dist_offset = st.sidebar.slider("Jarak Label Stesen ke Luar", 0.5, 5.0, 1.5)
@@ -81,26 +80,25 @@ if check_password():
     st.sidebar.markdown("---")
     st.sidebar.subheader("💾 Eksport QGIS")
 
-    # ================== BACA DATA ==================
+    # ================== BACA DATA (TUKAR KE point.csv) ==================
     try:
         if uploaded_file is not None:
             df = pd.read_csv(uploaded_file)
         else:
-            data_path = os.path.join(current_dir, "data ukur.csv")
+            # TUKAR DI SINI: Sekarang dia baca fail point.csv yang kau bagi
+            data_path = os.path.join(current_dir, "point.csv") 
             if os.path.exists(data_path):
                 df = pd.read_csv(data_path)
             else:
-                st.info("Sila upload fail CSV untuk bermula.")
+                st.info("Sila upload fail CSV atau pastikan fail 'point.csv' ada dalam folder.")
                 st.stop()
 
-        # Generate Geometri
         coords = list(zip(df['E'], df['N']))
         poly_geom = Polygon(coords)
         line_geom = LineString(coords + [coords[0]])
         centroid = poly_geom.centroid
         area = poly_geom.area
 
-        # --- PENYEDIAAN DATA QGIS ---
         poly_feature = {"type": "Feature", "properties": {"Jenis": "Kawasan", "Luas_m2": round(area, 3)}, "geometry": poly_geom.__geo_interface__}
         line_feature = {"type": "Feature", "properties": {"Jenis": "Sempadan"}, "geometry": line_geom.__geo_interface__}
         stn_features = [{"type": "Feature", "properties": {"STN": int(r['STN'])}, "geometry": Point(r['E'], r['N']).__geo_interface__} for _, r in df.iterrows()]
@@ -108,7 +106,6 @@ if check_password():
         
         st.sidebar.download_button("📥 Download GeoJSON", json.dumps(combined_geojson), "pelan_lengkap.geojson", "application/json")
 
-        # ================== METRIC ==================
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Luas (m²)", f"{area:.2f}")
         col2.metric("Luas (Ekar)", f"{area/4046.856:.4f}")
@@ -127,11 +124,9 @@ if check_password():
         fig.patch.set_facecolor(bg_color)
         ax.set_facecolor(bg_color)
 
-        # Plot Garisan Sempadan
         ax.plot(*(line_geom.xy), linewidth=2, color=line_c, zorder=4)
         ax.fill(*(poly_geom.exterior.xy), color='green', alpha=0.1, zorder=1)
 
-        # Grid Latar Belakang
         if show_bg_grid:
             min_e, min_n, max_e, max_n = poly_geom.bounds
             ax.set_xlim(np.floor(min_e/10)*10 - 20, np.ceil(max_e/10)*10 + 20)
@@ -142,38 +137,31 @@ if check_password():
         else:
             ax.axis('off')
 
-        # PAPARAN TULISAN LUAS (DENGAN SAIZ DINAMIK)
         ax.text(centroid.x, centroid.y, f"LUAS\n{area:.2f} m²", 
-                fontsize=label_size_luas, # <--- Menggunakan saiz dari slider
+                fontsize=label_size_luas, 
                 fontweight='bold', 
                 color='darkgreen', 
                 ha='center',
                 bbox=dict(boxstyle='round,pad=0.3', fc='white', alpha=0.9, ec='green'), 
                 zorder=10)
 
-        # Plot Label Bearing, Jarak dan No Stesen
         for i in range(len(df)):
             p1, p2 = df.iloc[i], df.iloc[(i + 1) % len(df)]
             dE, dN = p2['E'] - p1['E'], p2['N'] - p1['N']
             dist, bear = np.sqrt(dE**2 + dN**2), (np.degrees(np.arctan2(dE, dN)) + 360) % 360
-            
-            # Kira sudut pusingan teks supaya selari dengan garisan
             txt_angle = np.degrees(np.arctan2(dN, dE))
             if txt_angle > 90: txt_angle -= 180
             if txt_angle < -90: txt_angle += 180
             
-            # Label Bearing & Jarak
             ax.text((p1['E']+p2['E'])/2, (p1['N']+p2['N'])/2, f"{format_dms(bear)}\n{dist:.2f}m", 
                     fontsize=label_size_data, color='brown', fontweight='bold', ha='center', rotation=txt_angle,
                     bbox=dict(boxstyle='round,pad=0.1', fc=bg_color, alpha=0.4, ec='none'), zorder=6)
 
-            # Label Nombor Stesen (Offset ke luar)
             ve, vn = p1['E'] - centroid.x, p1['N'] - centroid.y
             mag = np.sqrt(ve**2 + vn**2)
             ax.text(p1['E'] + (ve/mag)*dist_offset, p1['N'] + (vn/mag)*dist_offset, 
                     str(int(p1['STN'])), fontsize=label_size_stn, fontweight='bold', color='blue', ha='center', zorder=7)
             
-            # Titik Stesen (Point)
             ax.scatter(p1['E'], p1['N'], color='red', s=50, edgecolors='black', zorder=8)
 
         ax.set_aspect("equal", adjustable="box")
@@ -183,15 +171,10 @@ if check_password():
         st.markdown("---")
         st.subheader("🛰️ Overlay Peta Satelit (Task 3)")
         
-        # Sediakan Map Folium (Peta Interaktif)
-        # Nota: Kita guna koordinat centroid sebagai pusat. 
-        # PERHATIAN: Peta web guna Lat/Lon. Jika data anda E/N (Meters), anda perlukan conversion.
-        # Untuk demo ini, saya sediakan fungsi "Auto-Center" interaktif.
+        # Lokasi Default: PUO
+        m = folium.Map(location=[4.596, 101.076], zoom_start=18)
         
-        m = folium.Map(location=[4.59, 101.07], zoom_start=18) # Default PUO area
-        
-        # Tambah Layer Google Satellite
-        google_sat = folium.TileLayer(
+        folium.TileLayer(
             tiles = 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
             attr = 'Google',
             name = 'Google Satellite',
@@ -199,11 +182,7 @@ if check_password():
             control = True
         ).add_to(m)
 
-        # Jika data anda Lat/Long, poligon akan muncul tepat.
-        # Jika data anda meter (RSO/Cassini), anda perlu tukar ke Lat/Long dulu.
-        st.info("💡 Peta interaktif di bawah membolehkan anda melihat lokasi lot secara satelit.")
         folium_static(m, width=1100)
-        # ======================================================================
 
     except Exception as e:
-        st.error(f"❌ Ralat: Sila pastikan format CSV betul (E, N, STN). Ralat teknikal: {e}")
+        st.error(f"❌ Ralat: Sila pastikan format CSV betul. Ralat teknikal: {e}")
