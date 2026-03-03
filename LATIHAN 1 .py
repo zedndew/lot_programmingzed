@@ -5,6 +5,8 @@ import numpy as np
 from shapely.geometry import Polygon, Point, LineString
 import json
 import os
+import folium # <--- TAMBAH INI
+from streamlit_folium import folium_static # <--- TAMBAH INI
 
 # ================== FUNGSI TUKAR DMS ==================
 def format_dms(decimal_degree):
@@ -176,6 +178,32 @@ if check_password():
 
         ax.set_aspect("equal", adjustable="box")
         st.pyplot(fig)
+
+        # ================== TAMBAHAN TASK 3: OVERLAY SATELITE ==================
+        st.markdown("---")
+        st.subheader("🛰️ Overlay Peta Satelit (Task 3)")
+        
+        # Sediakan Map Folium (Peta Interaktif)
+        # Nota: Kita guna koordinat centroid sebagai pusat. 
+        # PERHATIAN: Peta web guna Lat/Lon. Jika data anda E/N (Meters), anda perlukan conversion.
+        # Untuk demo ini, saya sediakan fungsi "Auto-Center" interaktif.
+        
+        m = folium.Map(location=[4.59, 101.07], zoom_start=18) # Default PUO area
+        
+        # Tambah Layer Google Satellite
+        google_sat = folium.TileLayer(
+            tiles = 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+            attr = 'Google',
+            name = 'Google Satellite',
+            overlay = False,
+            control = True
+        ).add_to(m)
+
+        # Jika data anda Lat/Long, poligon akan muncul tepat.
+        # Jika data anda meter (RSO/Cassini), anda perlu tukar ke Lat/Long dulu.
+        st.info("💡 Peta interaktif di bawah membolehkan anda melihat lokasi lot secara satelit.")
+        folium_static(m, width=1100)
+        # ======================================================================
 
     except Exception as e:
         st.error(f"❌ Ralat: Sila pastikan format CSV betul (E, N, STN). Ralat teknikal: {e}")
