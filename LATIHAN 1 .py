@@ -1,181 +1,215 @@
-import streamlit as st
-import pandas as pd
-import matplotlib.pyplot as plt
-import numpy as np
-from shapely.geometry import Polygon, Point, LineString
-import json
-import os
-
-# ================== FUNGSI TUKAR DMS ==================
-def format_dms(decimal_degree):
-    d = int(decimal_degree)
-    m = int((decimal_degree - d) * 60)
-    s = round((((decimal_degree - d) * 60) - m) * 60, 0)
-    return f"{d}°{abs(m):02d}'{abs(int(s)):02d}\""
-
-# ================== FUNGSI LOGIN ==================
-def check_password():
-    """Memulangkan True jika pengguna memasukkan kata laluan yang betul."""
-    def password_entered():
-        if st.session_state["password"] == "admin123": # <--- TUKAR PASSWORD ANDA DI SINI
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]  
-        else:
-            st.session_state["password_correct"] = False
-
-    if "password_correct" not in st.session_state:
-        st.text_input("Sila masukkan Kata Laluan", type="password", on_change=password_entered, key="password")
-        return False
-    elif not st.session_state["password_correct"]:
-        st.text_input("Sila masukkan Kata Laluan", type="password", on_change=password_entered, key="password")
-        st.error("😕 Kata laluan salah.")
-        return False
-    else:
-        return True
-
-# ================== MAIN APP ==================
-if check_password():
-    # Set config halaman
-    st.set_page_config(page_title="Visualisasi Poligon Pro", layout="wide")
-
-    # --- PENYELESAIAN LOGO ---
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    logo_path = os.path.join(current_dir, "puo.png")
-
-    col_logo, col_text = st.columns([1, 8])
-
-    with col_logo:
-        if os.path.exists(logo_path):
-            st.image(logo_path, width=120)
-        else:
-            try:
-                st.image("puo.png", width=120)
-            except:
-                st.markdown("⚠️ **Logo tidak dijumpai**")
-
-    with col_text:
-        st.title("POLITEKNIK UNGKU OMAR")
-        st.caption("Paparan poligon tanah dengan Grid Latar Belakang (Dashed)")
-
-    # ================== SIDEBAR ==================
-    st.sidebar.header("⚙️ Tetapan Paparan")
-    uploaded_file = st.sidebar.file_uploader("Upload fail CSV", type=["csv"])
-
-    st.sidebar.markdown("---")
-    plot_theme = st.sidebar.selectbox("Tema Warna Pelan", ["Light Mode", "Dark Mode", "Blueprint"])
-    show_bg_grid = st.sidebar.checkbox("Papar Grid Latar (Macam Gambar)", value=True)
-    grid_interval = st.sidebar.slider("Jarak Selang Grid", 5, 50, 10)
-
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("🖋️ Gaya Label")
-    label_size_stn = st.sidebar.slider("Saiz Label Stesen", 6, 16, 10)
-    label_size_data = st.sidebar.slider("Saiz Bearing/Jarak", 5, 12, 7)
-    
-    # FEATURE BARU: Slider untuk ubah saiz tulisan "LUAS"
-    label_size_luas = st.sidebar.slider("Saiz Tulisan LUAS", 8, 30, 12) 
-    
-    dist_offset = st.sidebar.slider("Jarak Label Stesen ke Luar", 0.5, 5.0, 1.5)
-
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("💾 Eksport QGIS")
-
-    # ================== BACA DATA ==================
-    try:
-        if uploaded_file is not None:
-            df = pd.read_csv(uploaded_file)
-        else:
-            data_path = os.path.join(current_dir, "data ukur.csv")
-            if os.path.exists(data_path):
-                df = pd.read_csv(data_path)
-            else:
-                st.info("Sila upload fail CSV untuk bermula.")
-                st.stop()
-
-        # Generate Geometri
-        coords = list(zip(df['E'], df['N']))
-        poly_geom = Polygon(coords)
-        line_geom = LineString(coords + [coords[0]])
-        centroid = poly_geom.centroid
-        area = poly_geom.area
-
-        # --- PENYEDIAAN DATA QGIS ---
-        poly_feature = {"type": "Feature", "properties": {"Jenis": "Kawasan", "Luas_m2": round(area, 3)}, "geometry": poly_geom.__geo_interface__}
-        line_feature = {"type": "Feature", "properties": {"Jenis": "Sempadan"}, "geometry": line_geom.__geo_interface__}
-        stn_features = [{"type": "Feature", "properties": {"STN": int(r['STN'])}, "geometry": Point(r['E'], r['N']).__geo_interface__} for _, r in df.iterrows()]
-        combined_geojson = {"type": "FeatureCollection", "features": [poly_feature, line_feature] + stn_features}
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visualisasi Poligon Pro - PUO</title>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+    <style>
+        :root {
+            --primary: #003366;
+            --bg: #f4f4f9;
+        }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; display: flex; height: 100vh; background: var(--bg); }
         
-        st.sidebar.download_button("📥 Download GeoJSON", json.dumps(combined_geojson), "pelan_lengkap.geojson", "application/json")
+        /* Sidebar */
+        #sidebar { width: 300px; background: white; padding: 20px; border-right: 1px solid #ddd; overflow-y: auto; }
+        .logo-section { text-align: center; margin-bottom: 20px; }
+        .logo-placeholder { font-weight: bold; color: var(--primary); font-size: 1.2rem; }
+        
+        /* Main Content */
+        #main { flex: 1; padding: 20px; display: flex; flex-direction: column; }
+        .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px; }
+        .metric-card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); text-align: center; }
+        .metric-card h3 { margin: 0; font-size: 0.8rem; color: #666; }
+        .metric-card p { margin: 5px 0 0; font-size: 1.2rem; font-weight: bold; color: var(--primary); }
 
-        # ================== METRIC ==================
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Luas (m²)", f"{area:.2f}")
-        col2.metric("Luas (Ekar)", f"{area/4046.856:.4f}")
-        col3.metric("Bilangan Stesen", len(df))
-        col4.metric("Status", "Tutup" if poly_geom.is_valid else "Ralat")
+        #canvas-container { flex: 1; background: white; border-radius: 8px; position: relative; overflow: hidden; border: 1px solid #ccc; }
+        canvas { width: 100%; height: 100%; cursor: crosshair; }
+        
+        input, select, slider { width: 100%; margin-bottom: 15px; }
+        label { font-size: 0.9rem; font-weight: bold; display: block; margin-bottom: 5px; }
+    </style>
+</head>
+<body>
 
-        # ================== PLOT (MATPLOTLIB) ==================
-        if plot_theme == "Dark Mode":
-            bg_color, grid_color, text_color, line_c = "#121212", "#555555", "white", "cyan"
-        elif plot_theme == "Blueprint":
-            bg_color, grid_color, text_color, line_c = "#003366", "#004080", "white", "yellow"
-        else:
-            bg_color, grid_color, text_color, line_c = "#ffffff", "#aaaaaa", "black", "black"
+<div id="sidebar">
+    <div class="logo-section">
+        <div class="logo-placeholder">POLITEKNIK UNGKU OMAR</div>
+        <p style="font-size: 0.8rem;">Visualisasi Poligon Tanah</p>
+    </div>
 
-        fig, ax = plt.subplots(figsize=(10, 8))
-        fig.patch.set_facecolor(bg_color)
-        ax.set_facecolor(bg_color)
+    <label>Muat Naik CSV (E, N, STN)</label>
+    <input type="file" id="csvFile" accept=".csv">
 
-        # Plot Garisan Sempadan
-        ax.plot(*(line_geom.xy), linewidth=2, color=line_c, zorder=4)
-        ax.fill(*(poly_geom.exterior.xy), color='green', alpha=0.1, zorder=1)
+    <hr>
+    <label>Tema Warna</label>
+    <select id="theme">
+        <option value="light">Light Mode</option>
+        <option value="dark">Dark Mode</option>
+        <option value="blueprint">Blueprint</option>
+    </select>
 
-        # Grid Latar Belakang
-        if show_bg_grid:
-            min_e, min_n, max_e, max_n = poly_geom.bounds
-            ax.set_xlim(np.floor(min_e/10)*10 - 20, np.ceil(max_e/10)*10 + 20)
-            ax.set_ylim(np.floor(min_n/10)*10 - 20, np.ceil(max_n/10)*10 + 20)
-            ax.grid(True, which='both', color=grid_color, linestyle='--', linewidth=0.8, alpha=0.7, zorder=0)
-            ax.xaxis.set_major_locator(plt.MultipleLocator(grid_interval))
-            ax.yaxis.set_major_locator(plt.MultipleLocator(grid_interval))
-        else:
-            ax.axis('off')
+    <label>Saiz Tulisan LUAS</label>
+    <input type="range" id="sizeLuas" min="10" max="40" value="20">
 
-        # PAPARAN TULISAN LUAS (DENGAN SAIZ DINAMIK)
-        ax.text(centroid.x, centroid.y, f"LUAS\n{area:.2f} m²", 
-                fontsize=label_size_luas, # <--- Menggunakan saiz dari slider
-                fontweight='bold', 
-                color='darkgreen', 
-                ha='center',
-                bbox=dict(boxstyle='round,pad=0.3', fc='white', alpha=0.9, ec='green'), 
-                zorder=10)
+    <label>Saiz Label Stesen</label>
+    <input type="range" id="sizeStn" min="8" max="20" value="12">
+    
+    <button id="downloadJson" style="width:100%; padding: 10px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">
+        📥 Simpan GeoJSON
+    </button>
+</div>
 
-        # Plot Label Bearing, Jarak dan No Stesen
-        for i in range(len(df)):
-            p1, p2 = df.iloc[i], df.iloc[(i + 1) % len(df)]
-            dE, dN = p2['E'] - p1['E'], p2['N'] - p1['N']
-            dist, bear = np.sqrt(dE**2 + dN**2), (np.degrees(np.arctan2(dE, dN)) + 360) % 360
-            
-            # Kira sudut pusingan teks supaya selari dengan garisan
-            txt_angle = np.degrees(np.arctan2(dN, dE))
-            if txt_angle > 90: txt_angle -= 180
-            if txt_angle < -90: txt_angle += 180
-            
-            # Label Bearing & Jarak
-            ax.text((p1['E']+p2['E'])/2, (p1['N']+p2['N'])/2, f"{format_dms(bear)}\n{dist:.2f}m", 
-                    fontsize=label_size_data, color='brown', fontweight='bold', ha='center', rotation=txt_angle,
-                    bbox=dict(boxstyle='round,pad=0.1', fc=bg_color, alpha=0.4, ec='none'), zorder=6)
+<div id="main">
+    <div class="metrics">
+        <div class="metric-card"><h3>Luas (m²)</h3><p id="m-area">0.00</p></div>
+        <div class="metric-card"><h3>Luas (Ekar)</h3><p id="m-acre">0.0000</p></div>
+        <div class="metric-card"><h3>Stesen</h3><p id="m-stn">0</p></div>
+        <div class="metric-card"><h3>Status</h3><p id="m-status">-</p></div>
+    </div>
 
-            # Label Nombor Stesen (Offset ke luar)
-            ve, vn = p1['E'] - centroid.x, p1['N'] - centroid.y
-            mag = np.sqrt(ve**2 + vn**2)
-            ax.text(p1['E'] + (ve/mag)*dist_offset, p1['N'] + (vn/mag)*dist_offset, 
-                    str(int(p1['STN'])), fontsize=label_size_stn, fontweight='bold', color='blue', ha='center', zorder=7)
-            
-            # Titik Stesen (Point)
-            ax.scatter(p1['E'], p1['N'], color='red', s=50, edgecolors='black', zorder=8)
+    <div id="canvas-container">
+        <canvas id="polyCanvas"></canvas>
+    </div>
+</div>
 
-        ax.set_aspect("equal", adjustable="box")
-        st.pyplot(fig)
+<script>
+    const fileInput = document.getElementById('csvFile');
+    const canvas = document.getElementById('polyCanvas');
+    const ctx = canvas.getContext('2d');
+    let rawData = [];
 
-    except Exception as e:
-        st.error(f"❌ Ralat: Sila pastikan format CSV betul (E, N, STN). Ralat teknikal: {e}")
+    // Listener Input
+    fileInput.addEventListener('change', handleFile);
+    window.addEventListener('resize', draw);
+    document.querySelectorAll('input, select').forEach(el => el.addEventListener('input', draw));
+
+    function handleFile(e) {
+        const file = e.target.files[0];
+        const reader = new FileReader();
+        reader.onload = function(event) {
+            const text = event.target.result;
+            processData(text);
+        };
+        reader.readAsText(file);
+    }
+
+    function processData(csvText) {
+        const lines = csvText.split('\n');
+        rawData = [];
+        const headers = lines[0].split(',').map(h => h.trim().toUpperCase());
+        
+        for(let i = 1; i < lines.length; i++) {
+            const cols = lines[i].split(',');
+            if(cols.length >= 3) {
+                rawData.push({
+                    E: parseFloat(cols[headers.indexOf('E')]),
+                    N: parseFloat(cols[headers.indexOf('N')]),
+                    STN: cols[headers.indexOf('STN')]
+                });
+            }
+        }
+        calculateArea();
+        draw();
+    }
+
+    function calculateArea() {
+        if (rawData.length < 3) return;
+        let area = 0;
+        for (let i = 0; i < rawData.length; i++) {
+            let j = (i + 1) % rawData.length;
+            area += rawData[i].E * rawData[j].N;
+            area -= rawData[j].E * rawData[i].N;
+        }
+        area = Math.abs(area) / 2;
+        document.getElementById('m-area').innerText = area.toFixed(2);
+        document.getElementById('m-acre').innerText = (area / 4046.856).toFixed(4);
+        document.getElementById('m-stn').innerText = rawData.length;
+        document.getElementById('m-status').innerText = "Tutup";
+        return area;
+    }
+
+    function draw() {
+        if (rawData.length === 0) return;
+
+        // Set saiz canvas
+        canvas.width = canvas.offsetWidth;
+        canvas.height = canvas.offsetHeight;
+
+        const theme = document.getElementById('theme').value;
+        const sizeLuas = document.getElementById('sizeLuas').value;
+        const sizeStn = document.getElementById('sizeStn').value;
+
+        // Warna Tema
+        let bg = "#ffffff", line = "#000000", grid = "#dddddd", text = "#000000";
+        if(theme === 'dark') { bg = "#121212"; line = "cyan"; grid = "#333333"; text = "white"; }
+        if(theme === 'blueprint') { bg = "#003366"; line = "yellow"; grid = "#004080"; text = "white"; }
+
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Scaling (Fit poligon ke dalam canvas)
+        const margin = 50;
+        const minE = Math.min(...rawData.map(d => d.E));
+        const maxE = Math.max(...rawData.map(d => d.E));
+        const minN = Math.min(...rawData.map(d => d.N));
+        const maxN = Math.max(...rawData.map(d => d.N));
+
+        const scale = Math.min(
+            (canvas.width - margin * 2) / (maxE - minE),
+            (canvas.height - margin * 2) / (maxN - minN)
+        );
+
+        const tx = (d) => margin + (d - minE) * scale;
+        const ty = (d) => canvas.height - (margin + (d - minN) * scale); // Invert Y untuk koordinat utara
+
+        // Draw Grid
+        ctx.strokeStyle = grid;
+        ctx.setLineDash([5, 5]);
+        for(let x = 0; x < canvas.width; x += 50) {
+            ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+        }
+        for(let y = 0; y < canvas.height; y += 50) {
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+        }
+        ctx.setLineDash([]);
+
+        // Draw Polygon
+        ctx.beginPath();
+        ctx.strokeStyle = line;
+        ctx.lineWidth = 2;
+        rawData.forEach((p, i) => {
+            if (i === 0) ctx.moveTo(tx(p.E), ty(p.N));
+            else ctx.lineTo(tx(p.E), ty(p.N));
+        });
+        ctx.closePath();
+        ctx.stroke();
+        ctx.fillStyle = "rgba(0, 255, 0, 0.1)";
+        ctx.fill();
+
+        // Draw Stations & Labels
+        rawData.forEach(p => {
+            ctx.fillStyle = "red";
+            ctx.beginPath();
+            ctx.arc(tx(p.E), ty(p.N), 4, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = "blue";
+            ctx.font = `bold ${sizeStn}px Arial`;
+            ctx.fillText(p.STN, tx(p.E) + 8, ty(p.N) - 8);
+        });
+
+        // Draw Area Label (Centroid)
+        const avgE = rawData.reduce((a, b) => a + b.E, 0) / rawData.length;
+        const avgN = rawData.reduce((a, b) => a + b.N, 0) / rawData.length;
+        
+        ctx.fillStyle = "darkgreen";
+        ctx.font = `bold ${sizeLuas}px Arial`;
+        ctx.textAlign = "center";
+        ctx.fillText(`LUAS: ${document.getElementById('m-area').innerText} m²`, tx(avgE), ty(avgN));
+    }
+</script>
+
+</body>
+</html>
